@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech Search</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }
+        .recording-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: gray;
+            display: inline-block;
+            margin-right: 10px;
+        }
+        .recording {
+            background-color: red;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .transcription-item {
+            border-left: 4px solid #007bff;
+            padding: 10px 15px;
+            margin-bottom: 15px;
+            background-color: #f8f9fa;
+            border-radius: 0 4px 4px 0;
+        }
+        .search-highlight {
+            background-color: yellow;
+            font-weight: bold;
+        }
+        #recordingControls {
+            margin-bottom: 2rem;
+        }
+        #searchControls {
+            margin-bottom: 2rem;
+        }
+        .detected-language {
+            font-style: italic;
+            color: #6c757d;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">Speech Search</h1>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>Record Speech</h5>
+            </div>
+            <div class="card-body">
+                <div id="recordingControls">
+                    <div class="d-flex align-items-center mb-3">
+                        <span id="recordingIndicator" class="recording-indicator"></span>
+                        <span id="recordingStatus">Not recording</span>
+                    </div>
+                    
+                    <div class="btn-group" role="group">
+                        <button id="startRecording" class="btn btn-primary">Start Recording</button>
+                        <button id="stopRecording" class="btn btn-danger" disabled>Stop Recording</button>
+                    </div>
+                    <div class="mt-2">
+                        <label for="languageSelect" class="form-label">Select Language:</label>
+                        <select id="languageSelect" class="form-select">
+                            <option value="english">English</option>
+                            <option value="hindi">Hindi</option>
+                            <option value="sanskrit">Sanskrit</option>
+                            <option value="telugu">Telugu</option>
+                            <option value="kannada">Kannada</option>
+                            <option value="tamil">Tamil</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div id="processingStatus" class="alert alert-info d-none">
+                    Processing your speech...
+                </div>
+                
+                <div id="lastTranscription" class="alert alert-success d-none">
+                    <h6>Last Transcription: <span id="detectedLanguage" class="detected-language"></span></h6>
+                    <p id="transcriptionText"></p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>Search Transcriptions</h5>
+            </div>
+            <div class="card-body">
+                <div id="searchControls">
+                    <div class="input-group mb-3">
+                        <input type="text" id="searchInput" class="form-control" placeholder="Enter search term...">
+                        <button id="searchButton" class="btn btn-outline-secondary">Search</button>
+                    </div>
+                </div>
+                
+                <div id="searchResults" class="d-none">
+                    <h6>Search Results: <span id="resultCount">0</span> found</h6>
+                    <div id="resultsList"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5>All Transcriptions</h5>
+                <button id="refreshTranscriptions" class="btn btn-sm btn-outline-secondary">Refresh</button>
+            </div>
+            <div class="card-body">
+                <div id="allTranscriptions">
+                    <p class="text-muted">No transcriptions yet.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        
+        // DOM elements
+        const startButton = document.getElementById('startRecording');
+        const stopButton = document.getElementById('stopRecording');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const recordingStatus = document.getElementById('recordingStatus');
+        const processingStatus = document.getElementById('processingStatus');
+        const lastTranscription = document.getElementById('lastTranscription');
+        const transcriptionText = document.getElementById('transcriptionText');
+        const detectedLanguage = document.getElementById('detectedLanguage');
+        const searchInput = document.getElementById('searchInput');
+        const searchButton = document.getElementById('searchButton');
+        const searchResults = document.getElementById('searchResults');
+        const resultCount = document.getElementById('resultCount');
+        const resultsList = document.getElementById('resultsList');
+        const allTranscriptions = document.getElementById('allTranscriptions');
+        const refreshButton = document.getElementById('refreshTranscriptions');
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            // Check if browser supports getUserMedia
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert('Your browser does not support audio recording. Please use a modern browser like Chrome, Firefox, or Edge.');
+                startButton.disabled = true;
+                return;
+            }
+            
+            // Set up event listeners
+            startButton.addEventListener('click', startRecording);
+            stopButton.addEventListener('click', stopRecording);
+            searchButton.addEventListener('click', searchTranscriptions);
+            refreshButton.addEventListener('click', loadAllTranscriptions);
+            searchInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    searchTranscriptions();
+                }
+            });
+            
+            // Load initial transcriptions
+            loadAllTranscriptions();
+        });
+        
+        // Start recording function
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.addEventListener('dataavailable', event => {
+                    audioChunks.push(event.data);
+                });
+                
+                mediaRecorder.addEventListener('stop', () => {
+                    processAudio();
+                });
+                
+                mediaRecorder.start();
+                isRecording = true;
+                
+                // Update UI
+                startButton.disabled = true;
+                stopButton.disabled = false;
+                recordingIndicator.classList.add('recording');
+                recordingStatus.textContent = 'Recording...';
+                lastTranscription.classList.add('d-none');
+                
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                alert('Could not access microphone. Please ensure you have granted permission.');
+            }
+        }
+        
+        // Stop recording function
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                isRecording = false;
+                
+                // Update UI
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                recordingIndicator.classList.remove('recording');
+                recordingStatus.textContent = 'Recording stopped';
+                processingStatus.classList.remove('d-none');
+            }
+        }
+        
+        // Process recorded audio
+        function processAudio() {
+            const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+            const formData = new FormData();
+            formData.append('audio_file', audioBlob, 'recording.wav');
+            formData.append('language', document.getElementById('languageSelect').value);
+            
+            fetch('/api/transcribe', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                processingStatus.classList.add('d-none');
+                
+                if (data.status === 'success') {
+                    transcriptionText.textContent = data.transcript;
+                    
+                    // Display detected language
+                    const languageName = capitalizeFirstLetter(data.language || data.detected_language || 'unknown');
+                    detectedLanguage.textContent = `Detected: ${languageName}`;
+                    
+                    lastTranscription.classList.remove('d-none');
+                    
+                    // Refresh the transcription list
+                    loadAllTranscriptions();
+                } else {
+                    alert('Error processing audio: ' + data.message);
+                }
+            })
+            .catch(error => {
+                processingStatus.classList.add('d-none');
+                console.error('Error sending audio to server:', error);
+                alert('Error sending audio to server. Please try again.');
+            });
+        }
+        
+        // Helper function to capitalize first letter
+        function capitalizeFirstLetter(string) {
+            return string.charAt(0).toUpperCase() + string.slice(1);
+        }
+        
+        // Search transcriptions
+        function searchTranscriptions() {
+            const query = searchInput.value.trim();
+            if (!query) {
+                alert('Please enter a search term');
+                return;
+            }
+            
+            fetch(`/api/search?q=${encodeURIComponent(query)}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    resultCount.textContent = data.count;
+                    searchResults.classList.remove('d-none');
+                    
+                    if (data.count > 0) {
+                        resultsList.innerHTML = '';
+                        data.results.forEach(result => {
+                            const resultItem = document.createElement('div');
+                            resultItem.className = 'transcription-item';
+                            
+                            // Highlight the search term in the text
+                            const highlightedText = highlightSearchTerm(result.text, query);
+                            
+                            resultItem.innerHTML = `
+                                <div class="d-flex justify-content-between">
+                                    <small class="text-muted">${result.timestamp}</small>
+                                    <small class="text-muted">${capitalizeFirstLetter(result.language)}</small>
+                                </div>
+                                <p>${highlightedText}</p>
+                            `;
+                            
+                            resultsList.appendChild(resultItem);
+                        });
+                    } else {
+                        resultsList.innerHTML = '<p class="text-muted">No results found</p>';
+                    }
+                } else {
+                    alert('Error searching transcriptions: ' + data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error searching transcriptions:', error);
+                alert('Error searching transcriptions. Please try again.');
+            });
+        }
+        
+        // Load all transcriptions
+        function loadAllTranscriptions() {
+            fetch('/api/transcriptions')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    if (data.count > 0) {
+                        allTranscriptions.innerHTML = '';
+                        data.results.forEach(result => {
+                            const transcriptionItem = document.createElement('div');
+                            transcriptionItem.className = 'transcription-item';
+                            
+                            transcriptionItem.innerHTML = `
+                                <div class="d-flex justify-content-between">
+                                    <small class="text-muted">${result.timestamp}</small>
+                                    <small class="text-muted">${capitalizeFirstLetter(result.language)}</small>
+                                </div>
+                                <p>${result.text}</p>
+                            `;
+                            
+                            allTranscriptions.appendChild(transcriptionItem);
+                        });
+                    } else {
+                        allTranscriptions.innerHTML = '<p class="text-muted">No transcriptions yet.</p>';
+                    }
+                } else {
+                    console.error('Error loading transcriptions:', data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error loading transcriptions:', error);
+            });
+        }
+        
+        // Highlight search term in text
+        function highlightSearchTerm(text, searchTerm) {
+            const regex = new RegExp(`(${searchTerm})`, 'gi');
+            return text.replace(regex, '<span class="search-highlight">$1</span>');
+        }
+    </script>
+</body>
+</html> 
